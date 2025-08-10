@@ -1,0 +1,7 @@
+torch
+torchvision
+optuna
+numpy
+opencv-python
+Pillow
+scikit-learn
