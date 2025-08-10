@@ -1,12 +1,14 @@
 import streamlit as st
-st.set_page_config(page_title="Neonatal Jaundice Detection", layout="wide")
-
-import torch
-import torch.nn as nn
-from torchvision import transforms
-from PIL import Image
 import numpy as np
 import cv2
+from PIL import Image
+import joblib
+
+st.set_page_config(page_title="Neonatal Jaundice Detection", layout="wide")
+
+
+rf_model = joblib.load("jaundice_rf_model.pkl")  # Ensure same model as trained
+
 
 def white_balance_grayworld(img):
     img = img.astype(np.float32)
@@ -66,28 +68,33 @@ def preprocess_image_cv(img):
     img = cv2.bitwise_and(img, img, mask=skin_mask)
     return img
 
-class CNNModel(nn.Module):
-    def __init__(self, dropout_rate=0.3):
-        super().__init__()
-        self.features = nn.Sequential(
-            nn.Conv2d(3, 32, 3, padding=1), nn.ReLU(), nn.MaxPool2d(2),
-            nn.Conv2d(32, 64, 3, padding=1), nn.ReLU(), nn.MaxPool2d(2),
-            nn.Conv2d(64, 128, 3, padding=1), nn.ReLU(), nn.MaxPool2d(2)
-        )
-        self.classifier = nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(128 * 28 * 28, 128), nn.ReLU(), nn.Dropout(dropout_rate),
-            nn.Linear(128, 2)
-        )
 
-    def forward(self, x):
-        x = self.features(x)
-        return self.classifier(x)
+from scipy.stats import skew, kurtosis
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model = CNNModel(dropout_rate=0.3)
-model.load_state_dict(torch.load("jaundice_model.pth", map_location=device))
-model.eval()
+def extract_features(img_rgb):
+    img_hsv = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2HSV)
+
+    features = []
+
+    for i in range(3):  
+        channel = img_rgb[:, :, i].ravel()
+        features.extend([
+            np.mean(channel),
+            np.std(channel),
+            skew(channel),
+            kurtosis(channel)
+        ])
+
+    for i in range(3): 
+        channel = img_hsv[:, :, i].ravel()
+        features.extend([
+            np.mean(channel),
+            np.std(channel),
+            skew(channel),
+            kurtosis(channel)
+        ])
+
+    return np.array(features).reshape(1, -1)
 
 col1, col2, col3 = st.columns([1, 2, 1])
 
@@ -99,7 +106,7 @@ with col2:
     <h2 style='text-align: center; color: #2E86C1;'>
     Non-Invasive Neonatal Jaundice Detection by Machine Learning with Advanced Image Preprocessing
     </h2>
-    <h4 style='text-align: center;'>Kirit P S, Sumathi Shanmuganandam, Raveena A, and Brindha Senthil Kumar</h4>
+    <h4 style='text-align: center;'>Kirit P S, Sumathi Shanmuganandam, Praveena A, and Brindha Senthil Kumar</h4>
     <h5 style='text-align: center;'>
     Center of Excellence in Artificial Intelligence and Machine Learning,<br>
     Department of CSE(AI&ML),<br>
@@ -122,29 +129,21 @@ Revolutionizing newborn care with AI-powered, non-invasive neonatal jaundice det
 </p>
 """, unsafe_allow_html=True)
 
-
 uploaded_file = st.file_uploader("Upload a baby face image...", type=["jpg", "jpeg", "png"])
 
 if uploaded_file:
     image = Image.open(uploaded_file).convert("RGB")
     st.image(image, caption="Uploaded Image", use_container_width=True)
 
-    img_cv = np.array(image)[:, :, ::-1]  
+    img_cv = np.array(image)[:, :, ::-1]
     img_cv = preprocess_image_cv(img_cv)
+
     img_rgb = cv2.cvtColor(img_cv, cv2.COLOR_BGR2RGB)
+    features = extract_features(img_rgb)
 
-    transform = transforms.Compose([
-        transforms.ToTensor()
-    ])
-    img_tensor = transform(Image.fromarray(img_rgb)).unsqueeze(0).to(device)
-
-    with torch.no_grad():
-        output = model(img_tensor)
-        probabilities = torch.softmax(output, dim=1)
-        pred = torch.argmax(probabilities, 1).item()
-        confidence = probabilities[0][pred].item()
+    pred = rf_model.predict(features)[0]
+    confidence = rf_model.predict_proba(features)[0][pred]
 
     label_map = {0: "Normal", 1: "Jaundice Suspected"}
-
     st.subheader(f"Prediction: **{label_map[pred]}**")
     st.write(f"Confidence: **{confidence * 100:.2f}%**")
